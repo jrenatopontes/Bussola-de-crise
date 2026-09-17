@@ -1,0 +1,6 @@
+dados/brutos/*
+!dados/brutos/.gitkeep
+
+.venv/
+__pycache__/
+.ipynb_checkpoints/
