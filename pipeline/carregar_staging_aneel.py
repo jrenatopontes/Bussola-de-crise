@@ -92,6 +92,26 @@ COLUNAS_OCORRENCIAS_EMERGENCIAIS = {
     "CodIBGE": "cod_ibge",
 }
 
+# Schema alternativo, visto pela 1a vez no arquivo de 2026 -- a ANEEL
+# reformulou o dataset de Ocorrências Emergenciais nesse ano: causa já vem
+# em 4 colunas separadas (igual ao dataset de Interrupções) e vários campos
+# foram renomeados/removidos (não existe mais NumVeiculo, por exemplo).
+COLUNAS_OCORRENCIAS_EMERGENCIAIS_SCHEMA_NOVO = {
+    "DatGeracaoConjuntoDados": "dat_geracao_conjunto_dados",
+    "NomAgente": "nom_agente",
+    "NumCnpjDistribuidora": "num_cpf_cnpj",
+    "CodOcorrenciaEmergencial": "num_ocorrencia",
+    "CodConjUnidConsumidora": "ide_conj_und_consumidoras",
+    "DthIniOcorrencia": "dth_inicio_ocorrencia_aberta",
+    "DscFormaConhecimento": "dsc_canal_atendimento",
+    "DthFimOcorrencia": "dth_fim_ocorrencia_aberta",
+    "DscInterrupcaoAssociada": "dsc_num_interrupcao",
+    "NumTempoPreparacao": "mda_preparo",
+    "NumTempoDeslocamento": "mda_deslocamento",
+    "NumTempoExecucao": "mda_execucao",
+    "CodMunicipioIBGE": "cod_ibge",
+}
+
 # ATUALIZADO em 22/09 a partir das colunas REAIS do arquivo de 2021 (o
 # dicionário oficial da ANEEL que eu tinha usado antes não bate com o
 # arquivo real -- este dataset não tem CodMunicipioIBGE, CodOcorrencia nem
@@ -146,8 +166,31 @@ def carregar_ocorrencias_emergenciais(engine, ano, caminho):
     print(f"  {len(df_pe):,} linhas após filtro NomAgente contém '{FILTRO_NOM_AGENTE}'")
     print("  Agentes encontrados:", sorted(df_pe["NomAgente"].dropna().unique().tolist()))
 
-    df_pe = df_pe.rename(columns=COLUNAS_OCORRENCIAS_EMERGENCIAIS)
-    df_pe = df_pe[list(COLUNAS_OCORRENCIAS_EMERGENCIAIS.values())]
+    colunas_finais = list(COLUNAS_OCORRENCIAS_EMERGENCIAIS.values())
+
+    if "CodOcorrenciaEmergencial" in df_pe.columns:
+        # Schema novo (visto pela 1a vez no arquivo de 2026): causa já vem
+        # em 4 colunas separadas -- reconstrói dsc_ocorrencia_aberta no
+        # mesmo formato dos anos anteriores (só para manter consistência no
+        # staging; a transformação para dados.* já lê a causa direto de
+        # staging.interrupcoes, não usa esta coluna).
+        print("  Schema novo detectado (formato visto em 2026) -- usando mapeamento alternativo.")
+        df_pe = df_pe.rename(columns=COLUNAS_OCORRENCIAS_EMERGENCIAIS_SCHEMA_NOVO)
+        df_pe["dsc_ocorrencia_aberta"] = (
+            df_pe.get("DscFatoGeradorOrigem", pd.Series(dtype="object")).fillna("")
+            + ";" + df_pe.get("DscFatoGeradorTipo", pd.Series(dtype="object")).fillna("")
+            + ";" + df_pe.get("DscFatoGeradorCausa", pd.Series(dtype="object")).fillna("")
+            + ";" + df_pe.get("DscFatoGeradorDetalhe", pd.Series(dtype="object")).fillna("")
+        )
+        df_pe["num_veiculo"] = None  # não existe nesse schema
+        for col in colunas_finais:
+            if col not in df_pe.columns:
+                df_pe[col] = None
+        df_pe = df_pe[colunas_finais]
+    else:
+        df_pe = df_pe.rename(columns=COLUNAS_OCORRENCIAS_EMERGENCIAIS)
+        df_pe = df_pe[colunas_finais]
+
     df_pe["ano_arquivo_origem"] = ano
 
     print("  Gravando em staging.ocorrencias_emergenciais ...")
