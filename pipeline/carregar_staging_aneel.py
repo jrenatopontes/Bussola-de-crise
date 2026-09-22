@@ -13,15 +13,28 @@ escreve depois de conferir que essa primeira carga saiu como esperado.
 -----------------------------------------------------------------------
 COMO USAR (passo a passo)
 -----------------------------------------------------------------------
-1) Baixe os 2 arquivos do ano que você quer carregar (ex.: 2026):
+1) Baixe os 2 arquivos do ano que você quer carregar. Os arquivos brutos
+   NÃO ficam versionados neste repositório (são grandes demais para o
+   Git) -- baixe direto da ANEEL, um ano de cada vez, e salve em
+   dados/brutos/ (pasta ignorada pelo Git de propósito).
 
-   Ocorrências Emergenciais 2026 (parquet):
-   https://dadosabertos.aneel.gov.br/dataset/ced06b4c-45a5-4cae-8a7e-f576ffc3b412/resource/d0669ad0-24a2-4f34-85cc-1b08e82d7ad2/download/ocorrencias-emergenciais-rede-distribuicao-2026.parquet
+   ANEEL -- Ocorrências Emergenciais nas Redes de Distribuição
+   (página do dataset: https://dadosabertos.aneel.gov.br/dataset/ocorrencias-emergenciais-nas-redes-de-distribuicao)
+     2021: https://dadosabertos.aneel.gov.br/dataset/ced06b4c-45a5-4cae-8a7e-f576ffc3b412/resource/bca75c34-e3c7-4db2-a518-b76e6e18979c/download/ocorrencias-emergenciais-rede-distribuicao-2021.parquet
+     2022: https://dadosabertos.aneel.gov.br/dataset/ced06b4c-45a5-4cae-8a7e-f576ffc3b412/resource/25b24e8e-544d-42b9-9a8f-3e61f6a6eab1/download/ocorrencias-emergenciais-rede-distribuicao-2022.parquet
+     2023: https://dadosabertos.aneel.gov.br/dataset/ced06b4c-45a5-4cae-8a7e-f576ffc3b412/resource/560b6a3d-39b5-4b38-94ef-ca73d745866f/download/ocorrencias-emergenciais-rede-distribuicao-2023.parquet
+     2024: https://dadosabertos.aneel.gov.br/dataset/ced06b4c-45a5-4cae-8a7e-f576ffc3b412/resource/ef1d1ae6-39f1-4d9c-ace8-3c5024ca777a/download/ocorrencias-emergenciais-rede-distribuicao-2024.parquet
+     2025: https://dadosabertos.aneel.gov.br/dataset/ced06b4c-45a5-4cae-8a7e-f576ffc3b412/resource/6adda6b2-2e24-4637-8689-f48787847e8b/download/ocorrencias-emergenciais-rede-distribuicao-2025.parquet
+     2026: https://dadosabertos.aneel.gov.br/dataset/ced06b4c-45a5-4cae-8a7e-f576ffc3b412/resource/d0669ad0-24a2-4f34-85cc-1b08e82d7ad2/download/ocorrencias-emergenciais-rede-distribuicao-2026.parquet
 
-   Interrupções 2026 (parquet):
-   https://dadosabertos.aneel.gov.br/dataset/ccb25653-f07b-4f28-84c2-62a89d1f5a56/resource/cf722d0b-aa04-4681-bcd9-8a737e857182/download/interrupcoes-energia-eletrica-2026.parquet
-
-   Salve os dois numa pasta qualquer (ex.: uma pasta "Dados").
+   ANEEL -- Interrupções de Energia Elétrica nas Redes de Distribuição
+   (página do dataset: https://dadosabertos.aneel.gov.br/dataset/interrupcoes-de-energia-eletrica-nas-redes-de-distribuicao)
+     2021: https://dadosabertos.aneel.gov.br/dataset/ccb25653-f07b-4f28-84c2-62a89d1f5a56/resource/011e0086-8b2f-4fbc-a32b-f7c0f7bc9957/download/interrupcoes-energia-eletrica-2021.parquet
+     2022: https://dadosabertos.aneel.gov.br/dataset/ccb25653-f07b-4f28-84c2-62a89d1f5a56/resource/f40b948c-81a3-4d56-8e35-0af9c2533178/download/interrupcoes-energia-eletrica-2022.parquet
+     2023: https://dadosabertos.aneel.gov.br/dataset/ccb25653-f07b-4f28-84c2-62a89d1f5a56/resource/ddc26540-cd8c-4eef-a1ad-a234d24ed9c4/download/interrupcoes-energia-eletrica-2023.parquet
+     2024: https://dadosabertos.aneel.gov.br/dataset/ccb25653-f07b-4f28-84c2-62a89d1f5a56/resource/fc5ca52c-329c-4443-a2d6-08ccec711ade/download/interrupcoes-energia-eletrica-2024.parquet
+     2025: https://dadosabertos.aneel.gov.br/dataset/ccb25653-f07b-4f28-84c2-62a89d1f5a56/resource/691de320-cb3d-471b-b9ec-8c1b86af8c83/download/interrupcoes-energia-eletrica-2025.parquet
+     2026: https://dadosabertos.aneel.gov.br/dataset/ccb25653-f07b-4f28-84c2-62a89d1f5a56/resource/cf722d0b-aa04-4681-bcd9-8a737e857182/download/interrupcoes-energia-eletrica-2026.parquet
 
 2) Instale as dependências (uma vez só), no terminal:
    pip install pandas pyarrow sqlalchemy psycopg2-binary
@@ -30,11 +43,13 @@ COMO USAR (passo a passo)
    02_criar_tabelas_e_schemas.sql (banco bussola_de_crise com os schemas staging
    e dados criados).
 
-4) Rode este script no terminal, apontando para os 2 arquivos baixados:
+4) Rode este script no terminal, apontando para os 2 arquivos baixados
+   (exemplo para 2026 -- repita trocando o ano e os nomes dos arquivos
+   para 2021, 2022, 2023, 2024 e 2025):
 
    python carregar_staging_aneel.py --ano 2026 \
-       --ocorrencias "C:/caminho/ocorrencias-emergenciais-rede-distribuicao-2026.parquet" \
-       --interrupcoes "C:/caminho/interrupcoes-energia-eletrica-2026.parquet"
+       --ocorrencias "dados/brutos/ocorrencias-emergenciais-rede-distribuicao-2026.parquet" \
+       --interrupcoes "dados/brutos/interrupcoes-energia-eletrica-2026.parquet"
 
    (ajuste os caminhos para onde você salvou os arquivos)
 
