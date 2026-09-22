@@ -138,6 +138,33 @@ COLUNAS_INTERRUPCOES = {
     "NumCPFCNPJ": "num_cpf_cnpj",
 }
 
+# Schema alternativo, visto pela 1a vez no arquivo de 2026 -- mesma
+# reformulação da ANEEL que já vimos em Ocorrências Emergenciais. Diferenças
+# principais: (1) agora existem CodOcorrencia e CodInterrupcao como colunas
+# separadas -- reconstruímos num_ordem_interrupcao no formato antigo
+# "{num_ocorrencia}_{id_interrupcao}" para não quebrar a lógica de join
+# (split_part(...,'_',1)) nem o script de transformação; (2) a causa vem em
+# 4 colunas separadas (DscFatoGeradorOrigem/Tipo/Causa/Detalhe) em vez de 1
+# string só -- reconstruímos dsc_fato_gerador_interrupcao concatenando com
+# " - " para manter o mesmo formato que dados.causa espera; (3) o filtro de
+# agente usa NomAgente, não NomAgenteRegulado (que não existe nesse schema).
+# Campos sem equivalente direto (dsc_alimentador_subestacao,
+# dsc_subestacao_distribuicao, dsc_tipo_interrupcao, ide_motivo_interrupcao)
+# ficam NULL para 2026 -- nenhum deles é usado no modelo dados.* final
+# (são só informativos no staging).
+COLUNAS_INTERRUPCOES_SCHEMA_NOVO = {
+    "DatGeracaoConjuntoDados": "dat_geracao_conjunto_dados",
+    "CodConjUnidadeConsumidora": "ide_conjunto_unidade_consumidora",
+    "DscConjuntoUnidadeConsumidora": "dsc_conjunto_unidade_consumidora",
+    "NumNivelTensao": "num_nivel_tensao",
+    "QtdConsumidoresAfetados": "num_unidade_consumidora",
+    "QtdConsumidoresAtivos": "num_consumidor_conjunto",
+    "AnoCompetencia": "num_ano",
+    "NomAgente": "nom_agente_regulado",
+    "SigAgente": "sig_agente",
+    "NumCNPJDistribuidora": "num_cpf_cnpj",
+}
+
 
 def pedir_conexao():
     host = input("Host do PostgreSQL [localhost]: ").strip() or "localhost"
@@ -191,6 +218,16 @@ def carregar_ocorrencias_emergenciais(engine, ano, caminho):
         df_pe = df_pe.rename(columns=COLUNAS_OCORRENCIAS_EMERGENCIAIS)
         df_pe = df_pe[colunas_finais]
 
+    # As colunas de tempo (mda_preparo/deslocamento/execucao) são NUMERIC no
+    # Postgres. Em alguns anos (visto em 2026) essas colunas chegam do
+    # parquet como string vazia "" em vez de NULL/NaN quando o tempo não
+    # foi registrado -- Postgres rejeita "" num campo numeric ("invalid
+    # input syntax for type numeric"). pd.to_numeric com errors="coerce"
+    # converte "" (e qualquer outro valor não numérico) para NaN, que o
+    # to_sql grava corretamente como NULL.
+    for col in ("mda_preparo", "mda_deslocamento", "mda_execucao"):
+        df_pe[col] = pd.to_numeric(df_pe[col], errors="coerce")
+
     df_pe["ano_arquivo_origem"] = ano
 
     print("  Gravando em staging.ocorrencias_emergenciais ...")
@@ -212,16 +249,56 @@ def carregar_interrupcoes(engine, ano, caminho):
     df = pd.read_parquet(caminho)
     print(f"  {len(df):,} linhas no Brasil todo")
 
-    # Neste dataset a coluna de nome do agente se chama NomAgenteRegulado
-    # (não NomAgente, como no dataset de Ocorrências Emergenciais).
-    filtro = df["NomAgenteRegulado"].str.contains(FILTRO_NOM_AGENTE, case=False, na=False)
-    df_pe = df.loc[filtro].copy()
-    print(f"  {len(df_pe):,} linhas após filtro NomAgenteRegulado contém '{FILTRO_NOM_AGENTE}'")
-    print("  Agentes encontrados:", sorted(df_pe["NomAgenteRegulado"].dropna().unique().tolist()))
+    # Schema novo (visto pela 1a vez em 2026): tem CodInterrupcao/CodOcorrencia
+    # como colunas separadas e usa NomAgente (não NomAgenteRegulado, que não
+    # existe nesse schema) para o nome do agente.
+    schema_novo = "CodInterrupcao" in df.columns
+    coluna_filtro = "NomAgente" if schema_novo else "NomAgenteRegulado"
 
-    df_pe = df_pe.rename(columns=COLUNAS_INTERRUPCOES)
-    df_pe = df_pe[list(COLUNAS_INTERRUPCOES.values())]
+    filtro = df[coluna_filtro].str.contains(FILTRO_NOM_AGENTE, case=False, na=False)
+    df_pe = df.loc[filtro].copy()
+    print(f"  {len(df_pe):,} linhas após filtro {coluna_filtro} contém '{FILTRO_NOM_AGENTE}'")
+    print("  Agentes encontrados:", sorted(df_pe[coluna_filtro].dropna().unique().tolist()))
+
+    colunas_finais = list(COLUNAS_INTERRUPCOES.values())
+
+    if schema_novo:
+        print("  Schema novo detectado (formato visto em 2026) -- usando mapeamento alternativo.")
+        # Reconstrói num_ordem_interrupcao no formato antigo
+        # "{num_ocorrencia}_{id_interrupcao}" a partir das colunas separadas,
+        # para não quebrar a lógica de join (split_part(...,'_',1)).
+        df_pe["num_ordem_interrupcao"] = (
+            df_pe["CodOcorrencia"].astype(str) + "_" + df_pe["CodInterrupcao"].astype(str)
+        )
+        # Reconstrói dsc_fato_gerador_interrupcao (1 string, 4 níveis
+        # separados por " - ") a partir das 4 colunas separadas desse schema.
+        df_pe["dsc_fato_gerador_interrupcao"] = (
+            df_pe.get("DscFatoGeradorOrigem", pd.Series(dtype="object")).fillna("")
+            + " - " + df_pe.get("DscFatoGeradorTipo", pd.Series(dtype="object")).fillna("")
+            + " - " + df_pe.get("DscFatoGeradorCausa", pd.Series(dtype="object")).fillna("")
+            + " - " + df_pe.get("DscFatoGeradorDetalhe", pd.Series(dtype="object")).fillna("")
+        )
+        df_pe = df_pe.rename(columns=COLUNAS_INTERRUPCOES_SCHEMA_NOVO)
+        # Campos sem equivalente nesse schema (não usados no modelo dados.*
+        # final, só informativos no staging) ficam NULL para 2026.
+        for col in ("dsc_alimentador_subestacao", "dsc_subestacao_distribuicao",
+                    "dsc_tipo_interrupcao", "ide_motivo_interrupcao"):
+            df_pe[col] = None
+        for col in colunas_finais:
+            if col not in df_pe.columns:
+                df_pe[col] = None
+        df_pe = df_pe[colunas_finais]
+    else:
+        df_pe = df_pe.rename(columns=COLUNAS_INTERRUPCOES)
+        df_pe = df_pe[colunas_finais]
+
     df_pe["ano_arquivo_origem"] = ano
+
+    # Mesma cautela do fix de ocorrências: campos numeric/integer no Postgres
+    # podem chegar como string vazia em vez de NULL. Coerce evita o mesmo
+    # "invalid input syntax for type numeric/integer" que já vimos.
+    for col in ("num_nivel_tensao", "num_unidade_consumidora", "num_consumidor_conjunto", "num_ano"):
+        df_pe[col] = pd.to_numeric(df_pe[col], errors="coerce")
 
     print("  Gravando em staging.interrupcoes ...")
     df_pe.to_sql(
