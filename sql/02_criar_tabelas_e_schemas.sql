@@ -10,8 +10,10 @@
 --         preparo/deslocamento/execução.
 --   2. ANEEL — "Interrupções de Energia Elétrica nas Redes de Distribuição"
 --      https://dadosabertos.aneel.gov.br/dataset/interrupcoes-de-energia-eletrica-nas-redes-de-distribuicao
---      -> município, causa (já em 4 colunas), conjunto elétrico
---         (nome + total de consumidores) e consumidores afetados.
+--      -> município (via join com a fonte 1), causa (1 coluna só, com até
+--         4 níveis separados por " - " -- ver detalhe na seção da tabela
+--         dados.causa mais abaixo), conjunto elétrico (nome + total de
+--         consumidores) e consumidores afetados.
 --   3. INMET — Dados históricos (https://portal.inmet.gov.br/dadoshistoricos)
 --      -> clima; join externo por município/data, fora deste schema
 --         (não há entidade de clima no diagrama enviado).
