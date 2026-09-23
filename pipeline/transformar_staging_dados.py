@@ -19,6 +19,10 @@ Aplica as regras de modelagem validadas com os dados reais de 2021:
     recente de cada conjunto (foto do estado atual).
   - nome_municipio: vem do arquivo de referência dos 185 municípios de PE
     (não vem em nenhuma das 2 fontes ANEEL).
+  - Um mesmo num_ocorrencia pode ter mais de 1 chamado em
+    staging.ocorrencias_emergenciais (achado do QA em 23/09); mantemos só o
+    chamado mais antigo por (num_ocorrencia, ano) antes de ligar com
+    staging.interrupcoes, para não duplicar linhas de dados.interrupcao.
 
 -----------------------------------------------------------------------
 COMO USAR
@@ -237,6 +241,26 @@ def montar_ocorrencia_e_interrupcao(engine):
 
     # conjunto: usa direto o id (já é a mesma chave da tabela dados.conjunto_eletrico)
     interr["id_conjunto"] = interr["ide_conjunto_unidade_consumidora"].fillna(CONJUNTO_NAO_IDENTIFICADO)
+
+    # staging.ocorrencias_emergenciais pode ter MAIS DE 1 chamado apontando
+    # para o mesmo num_ocorrencia (regra de negócio: vários clientes na
+    # mesma localização podem gerar chamados separados para a mesma
+    # ocorrência). Achado do QA em 23/09: sem tratar isso, o merge abaixo
+    # vira um produto cartesiano -- cada interrupção que casa com um
+    # num_ocorrencia de múltiplos chamados era gravada 1 vez POR CHAMADO,
+    # inflando dados.interrupcao (345.621 gravadas vs. 177.986 esperadas,
+    # em 2021). Colapsamos para 1 chamado por (num_ocorrencia, ano) antes
+    # do merge -- critério de desempate: o mais antigo por data/hora de
+    # abertura (dth_inicio_ocorrencia_aberta).
+    antes_oe = len(oe)
+    oe = oe.sort_values("dth_inicio_ocorrencia_aberta").drop_duplicates(
+        subset=["num_ocorrencia", "ano_arquivo_origem"], keep="first"
+    )
+    if len(oe) < antes_oe:
+        print(
+            f"  Atenção: {antes_oe - len(oe):,} chamados extras em staging.ocorrencias_emergenciais "
+            "(mesmo num_ocorrencia + ano) colapsados em 1 só (o mais antigo por data/hora de abertura)."
+        )
 
     # liga com ocorrencias_emergenciais por occ_key + ano
     oe_slim = oe[[
