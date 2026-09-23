@@ -1,0 +1,104 @@
+# Relatório de QA — `transformar_staging_dados.py`
+
+**Data:** 23/09/2026
+**Ambiente testado:** banco local, ano de referência 2021 (staging carregado via `carregar_staging_aneel.py`)
+**Escopo:** validação da carga de staging e da transformação staging → modelo final (`dados.*`)
+
+----------------------------------------------------------------------------------------------------------------------
+
+## 1. Resumo executivo
+
+O pipeline (`01_criar_banco.sql` → `02_criar_tabelas_e_schemas.sql` → `carregar_staging_aneel.py` → `transformar_staging_dados.py`) rodou do início ao fim **sem erros** para o ano de 2021. Foram encontrados 3 pontos de atenção: (1) uma **inconsistência de volume real** na tabela `dados.interrupcao`, que indica duplicação de linhas — **compromete potencialmente 4 das 5 perguntas analíticas do canvas do projeto** e deveria ser tratada como prioridade alta antes de qualquer análise; (2) uma **documentação desatualizada** sobre a coluna causa, já investigada e sem impacto no funcionamento — só precisa de correção no comentário; e (3) uma **lacuna de escopo**: os dados do INMET (clima), necessários especificamente para a pergunta 5 do canvas, ainda não têm script de carga.
+
+----------------------------------------------------------------------------------------------------------------------
+
+## 2. Achado #1 — Duplicação de linhas em `dados.interrupcao`
+
+### O que foi observado
+
+| Etapa | Linhas |
+|---|---|
+| `staging.interrupcoes` carregadas (2021) | 192.644 |
+| Duplicadas removidas pelo próprio script (mesmo `num_ordem_interrupcao` + `ano_arquivo_origem`) | 14.658 |
+| Interrupções únicas esperadas | **177.986** |
+| Linhas gravadas em `dados.interrupcao` | **345.621** |
+
+O número final é quase o dobro do esperado.
+
+### Causa raiz identificada
+
+- `NumOcorrencia` **não é único** em `staging.ocorrencias_emergenciais`: **98.427** números de ocorrência distintos têm mais de 1 "chamado" associado, somando **231.250** chamados no total.
+- Isso é esperado pela regra de negócio (clientes na mesma localização geram a mesma ocorrência automaticamente — vários chamados podem apontar para o mesmo `NumOcorrencia`).
+- O problema é que o `JOIN` usado pelo script para casar `staging.interrupcoes` com `staging.ocorrencias_emergenciais` não trata essa repetição: cada interrupção que casa com um `NumOcorrencia` de múltiplos chamados vira **uma linha para cada chamado** (efeito cartesiano), em vez de permanecer como 1 linha.
+- Confirmado: **66.474 interrupções** (de ~177.986 únicas, ou seja, **~37%**) aparecem duplicadas em `dados.interrupcao`.
+
+### Evidência (consultas usadas)
+
+```sql
+-- Ocorrências com múltiplos chamados
+SELECT COUNT(*) AS num_ocorrencias_com_multiplos_chamados, SUM(qtd) AS total_chamados_nesses_casos
+FROM (
+    SELECT num_ocorrencia, COUNT(*) AS qtd
+    FROM staging.ocorrencias_emergenciais
+    GROUP BY num_ocorrencia
+    HAVING COUNT(*) > 1
+) sub;
+-- Resultado: 98.427 / 231.250
+
+-- Interrupções duplicadas na tabela final
+SELECT COUNT(*) AS total_interrupcoes_duplicadas
+FROM (
+    SELECT num_ordem_interrupcao_origem, COUNT(*) AS qtd
+    FROM dados.interrupcao
+    GROUP BY num_ordem_interrupcao_origem
+    HAVING COUNT(*) > 1
+) sub;
+-- Resultado: 66.474
+```
+
+### Impacto
+
+- O percentual de casamento reportado pelo script (96,4%) **não é comparável** com os 92,7% validados anteriormente, porque a base de comparação mudou de tamanho (345.621 em vez de 177.986).
+- Qualquer contagem, métrica ou análise feita em cima de `dados.interrupcao` hoje (nº de interrupções, consumidores afetados, tempo médio, etc.) estará **inflada** para os casos de ocorrência com múltiplos chamados.
+- **Impacto direto no canvas de perguntas analíticas do projeto:** confirmado contra as 5 perguntas do canvas — este achado potencialmente compromete **4 das 5 perguntas** (todas as que dependem de contar volume/frequência via `dados.interrupcao`, direta ou indiretamente via join):
+  - Pergunta 1 (concentração geográfica por município/conjunto elétrico): municípios/conjuntos com mais ocorrências de múltiplos chamados apareceriam com volume artificialmente maior.
+  - Pergunta 2 (sazonalidade por mês/horário): mesmos meses/horários ficariam superrepresentados.
+  - Pergunta 3 (causas mais frequentes): a frequência por causa fica inflada nos mesmos casos.
+  - Pergunta 4 (duração média por etapa, por município/conjunto): os tempos em si vêm de `dados.ocorrencia` (não parece sofrer a mesma duplicação — a confirmar), mas qualquer cruzamento com município/conjunto via `dados.interrupcao` reintroduz o problema.
+  - Apenas a pergunta 5 não é afetada por este achado especificamente (já está bloqueada pelo achado #3, dados do INMET).
+- **Por isso, este achado deveria ser tratado como prioridade alta/bloqueante** antes de qualquer análise ser feita em cima de `dados.interrupcao` para responder ao canvas — não é um ajuste cosmético.
+
+### Sugestão
+
+Confirmar com o time se cada interrupção deve gerar **apenas 1 linha** em `dados.interrupcao`, ligada a **1 única ocorrência** — e, se sim, definir um critério de desempate para escolher qual chamado usar quando `NumOcorrencia` tiver mais de um (ex.: o primeiro por data/hora, ou o de menor `id`). Isso provavelmente exige um `DISTINCT ON` (ou equivalente) antes do `JOIN` no script.
+
+----------------------------------------------------------------------------------------------------------------------
+
+## 3. Achado #2 — Documentação desatualizada sobre a coluna causa (investigado, não é bug)
+
+- Em `transformar_staging_dados.py`: *"Causa: `DscFatoGeradorInterrupcao` (1 coluna) dividida em até 4 níveis por ' - ' (origem, tipo, grupo_causa, detalhe_causa)"*.
+- Em `02_criar_tabelas_e_schemas.sql`: a fonte 2 (Interrupções) já traz *"causa (já em 4 colunas)"*.
+
+**Investigação:** conferido em `staging.interrupcoes` (`\d` / `information_schema.columns`) — existe **apenas 1 coluna** de causa, `dsc_fato_gerador_interrupcao`. Isso confirma a descrição do `transformar_staging_dados.py`; o comentário do `02_criar_tabelas_e_schemas.sql` está **desatualizado** e deveria ser corrigido para evitar confusão futura.
+
+**Detalhe adicional encontrado:** o split por `' - '` resulta em **3 ou 4 níveis**, nunca menos que 3 e nunca mais que 4 (ex.: `"INTERNO - NAO PROGRAMADA - ALIVIO DE CARGA"` tem só 3 partes). Não há valores nulos ou vazios na coluna de origem. Isso é esperado — o script só precisa tratar bem o caso de 3 partes, deixando `detalhe_causa` como `NULL`. A confirmar: se `dados.causa` de fato grava `detalhe_causa = NULL` para esses casos (ex.: `SELECT * FROM dados.causa WHERE detalhe_causa IS NULL;`).
+
+**Confirmação final:** rodado `SELECT * FROM dados.causa WHERE detalhe_causa IS NULL;` — retornou apenas 2 linhas, ambas esperadas: o caso de 3 níveis (`INTERNO / NAO PROGRAMADA / ALIVIO DE CARGA`) e a linha sentinela (`NAO IDENTIFICADA`, usada para interrupções sem causa correspondente). **Achado fechado, sem impacto — só falta corrigir o comentário desatualizado no `02_criar_tabelas_e_schemas.sql`.**
+
+----------------------------------------------------------------------------------------------------------------------
+
+## 4. Achado #3 — Dados do INMET (clima) ainda fora do modelo carregado
+
+O `02_criar_tabelas_e_schemas.sql` cita o INMET como a 3ª fonte de dados do projeto (clima, dados históricos, join externo por município/data), necessária para responder perguntas do canvas do projeto — mas:
+
+- Não existe entidade de clima no diagrama enviado (schema `dados`).
+- Nenhum dos scripts recebidos até agora (`carregar_staging_aneel.py`, `transformar_staging_dados.py`) baixa, carrega ou faz o join com dados do INMET.
+
+
+----------------------------------------------------------------------------------------------------------------------
+
+## 5. Pontos ainda não testados
+
+- Demais anos do recorte (2022–2025 + 1º sem. 2026)
+
+----------------------------------------------------------------------------------------------------------------------
