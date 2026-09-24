@@ -15,8 +15,8 @@
 --         dados.causa mais abaixo), conjunto elétrico (nome + total de
 --         consumidores) e consumidores afetados.
 --   3. INMET — Dados históricos (https://portal.inmet.gov.br/dadoshistoricos)
---      -> clima; join externo por município/data, fora deste schema
---         (não há entidade de clima no diagrama enviado).
+--      -> clima; tabelas staging.inmet_* e dados.estacao / clima_diario /
+--         municipio_estacao, no fim deste arquivo (extensão do diagrama).
 --
 -- As duas fontes ANEEL são ligadas por ocorrência: NumOcorrencia (fonte 1)
 -- = primeira parte de NumOrdemInterrupcao, ANTES do "_" (fonte 2) --
@@ -224,3 +224,119 @@ CREATE TABLE dados.interrupcao (
 
 CREATE INDEX ix_interrupcao_ocorrencia         ON dados.interrupcao (id_ocorrencia);
 CREATE INDEX ix_interrupcao_num_ordem_origem   ON dados.interrupcao (num_ordem_interrupcao_origem);
+
+-- =====================================================================
+-- INMET — Dados históricos (https://portal.inmet.gov.br/dadoshistoricos)
+-- 1 ZIP por ano, 1 CSV por estação. Só entram as estações de PE
+-- (arquivos com "_PE_" no nome). Formato verificado em 2021 e 2026:
+-- separador ";", latin1, vírgula decimal, 8 linhas de cabeçalho da
+-- estação antes da tabela, hora sem medição = campo vazio.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- STAGING 3: cadastro das estações, 1 linha por estação POR ANO
+-- (as 8 linhas do topo de cada CSV). Por ano porque a coordenada muda:
+-- Recife (A301) tem latitude -8,059 em 2021 e -8,019 em 2026.
+-- ---------------------------------------------------------------------
+CREATE TABLE staging.inmet_estacao (
+    ano_arquivo_origem  smallint,
+    cod_estacao         text,       -- CODIGO (WMO), ex.: A301
+    nome_estacao        text,       -- ESTACAO
+    uf                  text,       -- UF
+    latitude            numeric,    -- LATITUDE
+    longitude           numeric,    -- LONGITUDE
+    altitude            numeric,    -- ALTITUDE
+    data_fundacao       text        -- DATA DE FUNDACAO (texto cru, ex.: 22/12/04)
+);
+
+-- ---------------------------------------------------------------------
+-- STAGING 4: espelho bruto das medições horárias (as 19 colunas do CSV).
+-- Hora em UTC, como vem do INMET -- a conversão para hora local é feita
+-- na transformação, não aqui (staging não se edita).
+-- ---------------------------------------------------------------------
+CREATE TABLE staging.inmet_horario (
+    ano_arquivo_origem     smallint,
+    cod_estacao            text,
+    data_medicao           date,     -- Data
+    hora_utc               text,     -- Hora UTC (texto cru, ex.: "0000 UTC")
+    precipitacao_total_mm  numeric,  -- PRECIPITAÇÃO TOTAL, HORÁRIO (mm)
+    pressao_estacao_mb     numeric,  -- PRESSAO ATMOSFERICA AO NIVEL DA ESTACAO, HORARIA (mB)
+    pressao_max_mb         numeric,  -- PRESSÃO ATMOSFERICA MAX.NA HORA ANT. (AUT) (mB)
+    pressao_min_mb         numeric,  -- PRESSÃO ATMOSFERICA MIN. NA HORA ANT. (AUT) (mB)
+    radiacao_global_kj_m2  numeric,  -- RADIACAO GLOBAL (Kj/m²)
+    temp_bulbo_seco_c      numeric,  -- TEMPERATURA DO AR - BULBO SECO, HORARIA (°C)
+    temp_orvalho_c         numeric,  -- TEMPERATURA DO PONTO DE ORVALHO (°C)
+    temp_max_c             numeric,  -- TEMPERATURA MÁXIMA NA HORA ANT. (AUT) (°C)
+    temp_min_c             numeric,  -- TEMPERATURA MÍNIMA NA HORA ANT. (AUT) (°C)
+    temp_orvalho_max_c     numeric,  -- TEMPERATURA ORVALHO MAX. NA HORA ANT. (AUT) (°C)
+    temp_orvalho_min_c     numeric,  -- TEMPERATURA ORVALHO MIN. NA HORA ANT. (AUT) (°C)
+    umidade_max_pct        numeric,  -- UMIDADE REL. MAX. NA HORA ANT. (AUT) (%)
+    umidade_min_pct        numeric,  -- UMIDADE REL. MIN. NA HORA ANT. (AUT) (%)
+    umidade_rel_pct        numeric,  -- UMIDADE RELATIVA DO AR, HORARIA (%)
+    vento_direcao_graus    numeric,  -- VENTO, DIREÇÃO HORARIA (gr) (° (gr))
+    vento_rajada_max_ms    numeric,  -- VENTO, RAJADA MAXIMA (m/s)
+    vento_velocidade_ms    numeric   -- VENTO, VELOCIDADE HORARIA (m/s)
+);
+
+CREATE INDEX ix_staging_inmet_horario_est_data ON staging.inmet_horario (cod_estacao, data_medicao);
+CREATE INDEX ix_staging_inmet_horario_ano      ON staging.inmet_horario (ano_arquivo_origem);
+
+-- ---------------------------------------------------------------------
+-- DIMENSÃO: estacao (1 linha por estação por ano)
+-- ---------------------------------------------------------------------
+CREATE TABLE dados.estacao (
+    id_estacao    text,
+    ano           smallint,
+    nome_estacao  text,
+    latitude      numeric,
+    longitude     numeric,
+    altitude      numeric,
+    PRIMARY KEY (id_estacao, ano)
+);
+
+-- ---------------------------------------------------------------------
+-- FATO: clima_diario (grão = 1 estação x 1 dia, em HORA LOCAL, UTC-3)
+-- Hora: o INMET grava em UTC (verificado 23/09: pico de radiação solar
+-- em Recife às 15h UTC = 12h local). A transformação converte para
+-- UTC-3 antes de somar por dia. A ANEEL foi tratada como hora local
+-- (evidência, não prova: na amostra de 500 ocorrências de 2025, o mínimo
+-- fica entre 1h e 4h e o pico às 8h). PENDÊNCIA QA: confirmar com a base
+-- completa.
+-- As colunas horas_com_* contam quantas das 24 horas tiveram medição,
+-- por variável -- muitas estações têm buracos grandes (ex.: Caruaru com
+-- 93% das horas sem chuva registrada em 2021). Chuva 0 com poucas horas
+-- medidas NÃO quer dizer "não choveu".
+-- Sem FK para dados.estacao: um dia local pode juntar horas de dois
+-- arquivos anuais (31/12 à noite em hora local = 01/01 em UTC).
+-- ---------------------------------------------------------------------
+CREATE TABLE dados.clima_diario (
+    id_estacao             text,
+    data_local             date,
+    precipitacao_total_mm  numeric,   -- soma das horas com medição
+    horas_com_chuva        smallint,
+    rajada_max_ms          numeric,   -- maior rajada do dia
+    horas_com_rajada       smallint,
+    temp_max_c             numeric,   -- maior das máximas horárias
+    temp_min_c             numeric,   -- menor das mínimas horárias
+    horas_com_temperatura  smallint,
+    PRIMARY KEY (id_estacao, data_local)
+);
+
+-- ---------------------------------------------------------------------
+-- LIGAÇÃO: municipio_estacao -- as 3 estações mais próximas de cada
+-- município, por ano (o conjunto de estações muda: Petrolina não existe
+-- em 2026). Distância em linha reta do centro do município (coordenadas
+-- do IBGE) até a estação, em km.
+-- Sem FK para dados.municipio DE PROPÓSITO: transformar_staging_dados.py
+-- faz TRUNCATE dados.municipio ... CASCADE, e o CASCADE apagaria esta
+-- tabela junto, sem aviso, toda vez que a transformação da ANEEL rodasse.
+-- ---------------------------------------------------------------------
+CREATE TABLE dados.municipio_estacao (
+    id_municipio  text,        -- código IBGE (mesmo de dados.municipio)
+    ano           smallint,
+    ordem         smallint,    -- 1 = mais próxima, 2, 3
+    id_estacao    text,
+    distancia_km  numeric,
+    PRIMARY KEY (id_municipio, ano, ordem),
+    FOREIGN KEY (id_estacao, ano) REFERENCES dados.estacao (id_estacao, ano)
+);
