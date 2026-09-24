@@ -66,13 +66,20 @@ import argparse
 import getpass
 
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 
 # Filtro aplicado em NomAgente (contém, sem diferenciar maiúsc./minúsc.).
 # Se o filtro pegar agente(s) errado(s) ou nada, ajuste esta string e rode
 # de novo -- o script imprime os nomes que bateram para você conferir.
 FILTRO_NOM_AGENTE = "PERNAMBUCO"
+
+# Achado #5c do QA (24/09): o recorte do projeto é "1º semestre de 2026",
+# mas o arquivo de 2026 baixado da ANEEL vem com dados até 31/07 -- não
+# existe corte automático no arquivo em si, então filtramos explicitamente
+# por data para o ano de 2026 (só ele; os demais anos não têm esse recorte).
+ANO_COM_CORTE_SEMESTRAL = 2026
+CORTE_SEMESTRAL = pd.Timestamp("2026-06-30 23:59:59")
 
 COLUNAS_OCORRENCIAS_EMERGENCIAIS = {
     "DatGeracaoConjuntoDados": "dat_geracao_conjunto_dados",
@@ -96,6 +103,19 @@ COLUNAS_OCORRENCIAS_EMERGENCIAIS = {
 # reformulou o dataset de Ocorrências Emergenciais nesse ano: causa já vem
 # em 4 colunas separadas (igual ao dataset de Interrupções) e vários campos
 # foram renomeados/removidos (não existe mais NumVeiculo, por exemplo).
+#
+# Achado #5b do QA (24/09), INVESTIGADO E FECHADO (não é bug do pipeline):
+# mda_preparo, mda_deslocamento e mda_execucao vêm 100% NULL para 2026.
+# Conferido em 24/09 contra o arquivo real: os nomes abaixo
+# (NumTempoPreparacao/NumTempoDeslocamento/NumTempoExecucao) ESTÃO corretos
+# -- essas colunas existem no arquivo com esses nomes exatos. O problema é
+# que a ANEEL publica essas 3 colunas vazias ("") para 100% das linhas de
+# 2026 -- provavelmente porque só são preenchidas quando o atendimento é
+# finalizado do lado deles, e os dados de 2026 (ano corrente) ainda não
+# tiveram tempo de "fechar", diferente de 2021-2025. Ou seja: limitação da
+# fonte para este ano específico, não algo que o script possa corrigir.
+# Impacto: a pergunta 4 do canvas (duração média por etapa) fica sem dado
+# disponível para 2026 -- os outros 5 anos não são afetados.
 COLUNAS_OCORRENCIAS_EMERGENCIAIS_SCHEMA_NOVO = {
     "DatGeracaoConjuntoDados": "dat_geracao_conjunto_dados",
     "NomAgente": "nom_agente",
@@ -163,7 +183,34 @@ COLUNAS_INTERRUPCOES_SCHEMA_NOVO = {
     "NomAgente": "nom_agente_regulado",
     "SigAgente": "sig_agente",
     "NumCNPJDistribuidora": "num_cpf_cnpj",
+    # Achado #5a do QA (24/09): estas 2 colunas existem no schema novo (com
+    # o MESMO nome do schema antigo -- ver "Colunas reais de Interrupções
+    # (schema novo, 2026)" na documentação), mas faltavam neste dicionário.
+    # Sem elas, dat_inicio_interrupcao/dat_fim_interrupcao ficavam 100% NULL
+    # para 2026 (o fallback "coluna não existe -> None" do código abaixo
+    # entrava em ação silenciosamente).
+    "DatInicioInterrupcao": "dat_inicio_interrupcao",
+    "DatFimInterrupcao": "dat_fim_interrupcao",
 }
+
+
+def limpar_staging_do_ano(engine, tabela, ano):
+    """Apaga (se existirem) as linhas já carregadas desse ano nessa tabela de
+    staging antes de inserir de novo -- torna o script seguro de rodar mais
+    de uma vez para o mesmo ano (idempotente). Sem isso (visto na prática ao
+    recarregar 2026 depois de corrigir os achados #5a/#5c do QA em 24/09), a
+    carga antiga (com bug) fica duplicada ao lado da carga nova (corrigida)."""
+    with engine.begin() as conn:
+        resultado = conn.execute(
+            text(f"DELETE FROM staging.{tabela} WHERE ano_arquivo_origem = :ano"),
+            {"ano": ano},
+        )
+        if resultado.rowcount:
+            print(
+                f"  Atenção: {resultado.rowcount:,} linhas de {ano} já existentes em "
+                f"staging.{tabela} foram apagadas antes desta carga (evita duplicar "
+                "se você já tinha carregado esse ano antes)."
+            )
 
 
 def pedir_conexao():
@@ -228,7 +275,23 @@ def carregar_ocorrencias_emergenciais(engine, ano, caminho):
     for col in ("mda_preparo", "mda_deslocamento", "mda_execucao"):
         df_pe[col] = pd.to_numeric(df_pe[col], errors="coerce")
 
+    # Achado #5c do QA (24/09): o arquivo de 2026 vem com dados até 31/07,
+    # um mês além do recorte do projeto ("1º semestre de 2026"). Filtra por
+    # dth_inicio_ocorrencia_aberta para manter só até 30/06.
+    if ano == ANO_COM_CORTE_SEMESTRAL:
+        antes = len(df_pe)
+        df_pe = df_pe[
+            pd.to_datetime(df_pe["dth_inicio_ocorrencia_aberta"]) <= CORTE_SEMESTRAL
+        ]
+        if len(df_pe) < antes:
+            print(
+                f"  Atenção: {antes - len(df_pe):,} linhas com dth_inicio_ocorrencia_aberta "
+                f"após 30/06/{ano} removidas (projeto cobre só o 1º semestre)."
+            )
+
     df_pe["ano_arquivo_origem"] = ano
+
+    limpar_staging_do_ano(engine, "ocorrencias_emergenciais", ano)
 
     print("  Gravando em staging.ocorrencias_emergenciais ...")
     df_pe.to_sql(
@@ -292,6 +355,21 @@ def carregar_interrupcoes(engine, ano, caminho):
         df_pe = df_pe.rename(columns=COLUNAS_INTERRUPCOES)
         df_pe = df_pe[colunas_finais]
 
+    # Achado #5c do QA (24/09): mesmo recorte de 30/06 aplicado em
+    # staging.ocorrencias_emergenciais, agora também em staging.interrupcoes
+    # (só foi possível confirmar aqui depois de corrigir o achado #5a --
+    # antes, dat_inicio_interrupcao vinha 100% NULL para 2026).
+    if ano == ANO_COM_CORTE_SEMESTRAL:
+        antes = len(df_pe)
+        df_pe = df_pe[
+            pd.to_datetime(df_pe["dat_inicio_interrupcao"]) <= CORTE_SEMESTRAL
+        ]
+        if len(df_pe) < antes:
+            print(
+                f"  Atenção: {antes - len(df_pe):,} linhas com dat_inicio_interrupcao "
+                f"após 30/06/{ano} removidas (projeto cobre só o 1º semestre)."
+            )
+
     df_pe["ano_arquivo_origem"] = ano
 
     # Mesma cautela do fix de ocorrências: campos numeric/integer no Postgres
@@ -299,6 +377,8 @@ def carregar_interrupcoes(engine, ano, caminho):
     # "invalid input syntax for type numeric/integer" que já vimos.
     for col in ("num_nivel_tensao", "num_unidade_consumidora", "num_consumidor_conjunto", "num_ano"):
         df_pe[col] = pd.to_numeric(df_pe[col], errors="coerce")
+
+    limpar_staging_do_ano(engine, "interrupcoes", ano)
 
     print("  Gravando em staging.interrupcoes ...")
     df_pe.to_sql(
