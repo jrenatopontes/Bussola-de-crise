@@ -2,21 +2,27 @@
 
 Documentação do banco `bussola_de_crise` (PostgreSQL), que organiza as ocorrências de interrupção de energia da Neoenergia PE entre 2021 e 2025 (5 anos completos) mais o 1º semestre de 2026.
 
-> ✅ **Status em 23/09: pipeline completo e revalidado após correção do QA.** Staging carregado para todos os 6 anos (2021-2026) e as 5 tabelas de `dados.*` repopuladas com o bug de duplicação (achado do QA) já corrigido.
+> ✅ **Status em 24/09: pipeline completo e revalidado após correção dos achados #1 e #5 do QA.** Staging recarregado para 2026 (achados #5a/#5c) e as 5 tabelas de `dados.*` repopuladas com todas as correções aplicadas.
 >
 > ⚠️ **QA em 23/09: achado de duplicação em `dados.interrupcao` (corrigido e reprocessado no mesmo dia).** O QA testou o pipeline com o ano de 2021 e encontrou que `dados.interrupcao` estava gravando quase o dobro das linhas esperadas (345.621 em vez de 177.986). Causa raiz: um mesmo `num_ocorrencia` pode ter mais de 1 "chamado" em `staging.ocorrencias_emergenciais` (vários clientes na mesma localização abrindo chamados para a mesma ocorrência), e o script não tratava isso antes do merge — cada interrupção que casava com uma ocorrência de múltiplos chamados era gravada 1 vez por chamado (efeito cartesiano). **Corrigido** em `transformar_staging_dados.py`: agora mantemos só 1 chamado por (`num_ocorrencia`, ano) antes do merge (o mais antigo por data/hora de abertura). O pipeline já foi **rodado de novo para os 6 anos** com a correção — ver contagens finais abaixo.
 
-**Contagens finais validadas (staging completo, após a correção de 23/09):**
+**Contagens finais validadas (staging completo, após a correção de 24/09 — achados #1 e #5a/#5c):**
 
 | Tabela | Linhas |
 |---|---|
 | `dados.municipio` | 186 (185 de PE + 1 sentinela) |
-| `dados.causa` | 76 (75 causas distintas + 1 sentinela) |
+| `dados.causa` | 75 (74 causas distintas + 1 sentinela) |
 | `dados.conjunto_eletrico` | 169 (168 + 1 sentinela) |
-| `dados.ocorrencia` | 1.078.022 (994.215 reais + 83.807 substitutas) — não mudou, essa tabela já tinha sua própria deduplicação |
-| `dados.interrupcao` | **1.225.358** (era 3.008.002 antes da correção — a diferença é exatamente a duplicação do bug) |
+| `dados.ocorrencia` | 1.058.604 (976.278 reais + 82.326 substitutas) |
+| `dados.interrupcao` | **1.199.657** |
 
-Casamento interrupção ↔ ocorrência no conjunto completo, recalculado sobre a base correta: **93,2% (1.141.551 de 1.225.358)**. O número de 97,2% reportado em 22/09 não valia — era calculado em cima da base inflada pelo bug.
+A queda em relação às contagens de 23/09 (`dados.ocorrencia` 1.078.022 → 1.058.604; `dados.interrupcao` 1.225.358 → 1.199.657) é esperada: é o efeito do corte do 1º semestre de 2026 (achado #5c), que removeu as linhas de julho/2026 do staging antes desta transformação — a diferença de 25.701 em `dados.interrupcao` bate exatamente com o número de linhas removidas no reload do staging.
+
+Casamento interrupção ↔ ocorrência no conjunto completo: **93,1% (1.117.331 de 1.199.657)**.
+
+> ⚠️ **QA em 24/09: achado #5, 3 problemas no schema novo de 2026 (`carregar_staging_aneel.py`).** (a) **Corrigido**: `staging.interrupcoes` gravava `dat_inicio_interrupcao`/`dat_fim_interrupcao` 100% NULL para 2026 — o dicionário do schema novo esquecia de mapear essas 2 colunas (elas existem no arquivo real, com o mesmo nome do schema antigo). (b) **Investigado, não é bug**: `mda_preparo`/`mda_deslocamento`/`mda_execucao` também vêm 100% NULL para 2026 em `staging.ocorrencias_emergenciais` — mas os nomes mapeados (`NumTempoPreparacao`/`NumTempoDeslocamento`/`NumTempoExecucao`) foram conferidos contra o arquivo real e estão corretos. A própria ANEEL publica essas 3 colunas vazias para 100% das linhas de 2026, provavelmente porque só são preenchidas quando o atendimento é finalizado do lado deles — limitação da fonte para este ano específico. **Impacto**: a pergunta 4 do canvas (duração média por etapa) fica sem dado disponível para 2026; os outros 5 anos não são afetados. (c) **Corrigido**: o arquivo de 2026 vem com dados até 31/07, um mês além do recorte do projeto ("1º semestre") — não existia filtro de data no script; adicionado um filtro que remove tudo após 30/06/2026, em ambas as tabelas de staging.
+>
+> Com os fixes (a) e (c) aplicados: staging de 2026 recarregado em 24/09 (a trava de idempotência do script limpou sozinha as cargas duplicadas de tentativas anteriores) e `transformar_staging_dados.py` rodado de novo para os 6 anos — as contagens acima já refletem essa correção.
 
 ## Fontes de dados
 
@@ -93,6 +99,9 @@ Cardinalidades:
 6. **`num_ocorrencia_origem` não é único entre anos** *(descoberto em 22/09)*: os códigos da ANEEL são numerados por ano, não globalmente. O valor gravado agora é composto com o ano de origem (`"{codigo}_{ano}"`), tanto para ocorrências reais quanto para as substitutas — sem isso, o `UNIQUE` da coluna quebra ao carregar mais de 1 ano junto.
 7. **`staging.interrupcoes` pode acumular linhas duplicadas** *(descoberto em 22/09)*: se alguma carga foi rodada mais de uma vez sem limpar o staging antes, a mesma interrupção (`num_ordem_interrupcao` + ano) pode aparecer repetida. O script de transformação agora remove essas duplicatas logo no início, antes de montar `dados.ocorrencia`/`dados.interrupcao`.
 8. **Um `num_ocorrencia` pode ter mais de 1 "chamado" em `staging.ocorrencias_emergenciais`** *(achado do QA em 23/09)*: clientes na mesma localização podem abrir chamados separados para a mesma ocorrência — regra de negócio esperada. O script não tratava isso antes do merge com `staging.interrupcoes`, o que multiplicava cada interrupção por chamado (produto cartesiano), inflando `dados.interrupcao` (confirmado: 345.621 linhas gravadas vs. 177.986 esperadas, em 2021 — 37% duplicadas). **Corrigido**: mantemos só 1 chamado por (`num_ocorrencia`, ano) antes do merge, usando o mais antigo por data/hora de abertura como critério de desempate. **Reprocessado com os 6 anos em 23/09**: 515.523 chamados extras colapsados, `dados.interrupcao` caiu de 3.008.002 para 1.225.358 linhas (sem duplicatas restantes).
+9. **Schema novo de 2026 tinha 2 colunas de data sem mapeamento** *(achado #5a do QA em 24/09)*: `DatInicioInterrupcao`/`DatFimInterrupcao` existem no arquivo real de Interrupções (schema novo), mas faltavam no dicionário `COLUNAS_INTERRUPCOES_SCHEMA_NOVO` — resultado, 100% NULL em `staging.interrupcoes` para 2026. **Corrigido**, mapeamento adicionado.
+10. **Tempos de atendimento não disponíveis para 2026** *(achado #5b do QA em 24/09, investigado — não é bug)*: `mda_preparo`/`mda_deslocamento`/`mda_execucao` vêm 100% vazios da própria ANEEL para o 1º semestre de 2026 (conferido contra o arquivo real — os nomes de coluna mapeados estão corretos). Provavelmente esses campos só são preenchidos quando o atendimento é finalizado do lado da ANEEL, e 2026 ainda é ano corrente. Pergunta 4 do canvas (duração média por etapa) fica sem dado para 2026; os demais 5 anos não são afetados.
+11. **Arquivo de 2026 não vem cortado no 1º semestre** *(achado #5c do QA em 24/09)*: o parquet baixado da ANEEL para "2026" traz dados até 31/07, um mês além do recorte do projeto. **Corrigido**: adicionado filtro explícito (`dth_inicio_ocorrencia_aberta`/`dat_inicio_interrupcao` <= 30/06/2026), aplicado só para esse ano.
 
 ## Estrutura de arquivos
 
@@ -133,4 +142,6 @@ Dados/
 - ~~Escrever o script de transformação staging → dimensões/fatos~~ ✅
 - ~~Rodar `transformar_staging_dados.py` de novo para os 6 anos, após a correção do achado #8 do QA~~ ✅ (23/09) — ver contagens finais corrigidas no topo.
 - Pedir ao QA para revalidar rapidamente com os dados reprocessados, antes de liberar para análise em cima do canvas.
-- Planejar o cruzamento com INMET (mapeamento estação meteorológica ↔ município).
+- ~~Recarregar o staging do ano 2026~~ ✅ (24/09) — rodado com a correção dos achados #5a/#5c: trava de idempotência limpou as cargas duplicadas anteriores, filtro de corte removeu as linhas de julho/2026.
+- ~~Rodar `transformar_staging_dados.py` de novo para os 6 anos, após a correção dos achados #5a/#5c~~ ✅ (24/09) — ver contagens finais atualizadas no topo.
+- Planejar o cruzamento com INMET (mapeamento estação meteorológica ↔ município) — Cauê já subiu `carregar_staging_inmet.py` e `transformar_staging_inmet.py` em `pipeline/` (2021 a 1º sem. 2026).
