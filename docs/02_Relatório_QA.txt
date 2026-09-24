@@ -1,0 +1,84 @@
+Relatório de QA — Achado #5: Mapeamento do "schema novo" de 2026
+
+Data: 24/09/2026 Ambiente testado: banco local, ano de referência 2026 (1º semestre, staging carregado via carregar_staging_aneel.py) Escopo: validação da carga de staging para o ano de 2026, que usa um schema de origem diferente dos anos 2021–2025
+
+1. Resumo executivo
+
+Ao carregar os dados de 2026, o próprio carregar_staging_aneel.py avisou: "Schema novo detectado (formato visto em 2026) -- usando mapeamento alternativo." A investigação encontrou 3 problemas confirmados nesse mapeamento alternativo: (1) e (2) colunas inteiras ficando NULL para 100% das linhas em duas tabelas diferentes, e (3) o filtro de "até 30/06" não está correto — os dados vão até 31/07, um mês além do esperado.
+
+-----------------------------------------------------------------------------------------------------
+
+2. Achado #5a — Datas nulas em staging.interrupcoes
+Coluna	Linhas com valor	Total de linhas
+dat_inicio_interrupcao	0	204.149
+dat_fim_interrupcao	0	204.149
+dsc_fato_gerador_interrupcao (causa)	204.149	204.149
+ide_conjunto_unidade_consumidora	204.149	204.149
+num_ordem_interrupcao	204.149	204.149
+
+100% das interrupções de 2026 estão sem data de início e fim. As demais colunas testadas vieram completas. O mapeamento alternativo aparentemente não está associando corretamente as colunas de data do schema novo às colunas esperadas pelo restante do pipeline.
+
+Evidência (consultas usadas)
+sql
+SELECT 
+    COUNT(*) AS total,
+    COUNT(dat_inicio_interrupcao) AS com_dat_inicio,
+    COUNT(dat_fim_interrupcao) AS com_dat_fim,
+    COUNT(dsc_fato_gerador_interrupcao) AS com_causa,
+    COUNT(ide_conjunto_unidade_consumidora) AS com_conjunto,
+    COUNT(num_ordem_interrupcao) AS com_num_ordem
+FROM staging.interrupcoes
+WHERE ano_arquivo_origem = 2026;
+-- Resultado: 204149 / 0 / 0 / 204149 / 204149 / 204149
+
+Impacto
+Bloqueia qualquer análise de sazonalidade (pergunta 2 do canvas) que dependa da data de interrupção para 2026.
+Impede a verificação do filtro de 30/06 (ver achado #5c).
+
+---------------------------------------------------------------------------------------------------
+3. Achado #5b — Tempos de etapa nulos em staging.ocorrencias_emergenciais
+Coluna	               Linhas com valor	Total de linhas
+num_ocorrencia	                235.821 235.821
+dth_inicio_ocorrencia_aberta	235.821	235.821
+dth_fim_ocorrencia_aberta	235.821	235.821
+mda_preparo	                     0  235.821
+mda_deslocamento                     0  235.821
+mda_execucao    	             0  235.821
+
+100% das ocorrências de 2026 estão sem os tempos de preparo, deslocamento e execução. Diferente do achado #5a, aqui as datas de abertura/fechamento vieram corretas — o problema é isolado nas 3 colunas de duração por etapa.
+
+Evidência (consulta usada)
+sql
+SELECT 
+    COUNT(*) AS total,
+    COUNT(num_ocorrencia) AS com_num_ocorrencia,
+    COUNT(dth_inicio_ocorrencia_aberta) AS com_dth_inicio,
+    COUNT(dth_fim_ocorrencia_aberta) AS com_dth_fim,
+    COUNT(mda_preparo) AS com_preparo,
+    COUNT(mda_deslocamento) AS com_deslocamento,
+    COUNT(mda_execucao) AS com_execucao
+FROM staging.ocorrencias_emergenciais
+WHERE ano_arquivo_origem = 2026;
+-- Resultado: 235821 / 235821 / 235821 / 235821 / 0 / 0 / 0
+
+**Impacto**
+Bloqueia diretamente a pergunta 4 do canvas (duração média por etapa) para o ano de 2026. O resto dos anos consegue realizar a consulta.
+
+4. Achado #5c — Filtro de 30/06 CONFIRMADO COMO INCORRETO
+
+
+sql
+SELECT MIN(dth_inicio_ocorrencia_aberta) AS data_minima, MAX(dth_inicio_ocorrencia_aberta) AS data_maxima
+FROM staging.ocorrencias_emergenciais
+WHERE ano_arquivo_origem = 2026;
+-- Resultado: 2026-01-01 00:00:00.000 / 2026-07-31 23:57:00.000
+
+Confirmado: o filtro NÃO está correto. A data máxima é 31/07/2026, um mês inteiro além do esperado (30/06/2026). Ou seja, o carregar_staging_aneel.py está carregando dados de julho também, contrariando a definição do recorte do projeto ("1º semestre de 2026").
+
+Impacto: qualquer análise feita com os dados de 2026 do jeito que estão hoje incluiria um mês de dados fora do escopo definido no canvas do projeto.
+
+5. Sugestões
+
+Revisar o "mapeamento alternativo" do schema novo de 2026 no carregar_staging_aneel.py, especificamente:
+
+- Corrigir o filtro de "até 30/06" — confirmado que hoje ele deixa passar dados até 31/07.
