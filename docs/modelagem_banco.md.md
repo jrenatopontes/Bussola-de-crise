@@ -4,6 +4,8 @@ Documentação do banco `bussola_de_crise` (PostgreSQL), que organiza as ocorrê
 
 > ✅ **Status em 24/09: pipeline completo e revalidado após correção dos achados #1 e #5 do QA.** Staging recarregado para 2026 (achados #5a/#5c) e as 5 tabelas de `dados.*` repopuladas com todas as correções aplicadas.
 >
+> ✅ **Status em 24/09: extensão INMET concluída.** Schema, carga do staging e transformação do INMET (clima), escritos pelo Cauê, rodados para os 6 anos — ver seção "Extensão INMET" mais abaixo.
+>
 > ⚠️ **QA em 23/09: achado de duplicação em `dados.interrupcao` (corrigido e reprocessado no mesmo dia).** O QA testou o pipeline com o ano de 2021 e encontrou que `dados.interrupcao` estava gravando quase o dobro das linhas esperadas (345.621 em vez de 177.986). Causa raiz: um mesmo `num_ocorrencia` pode ter mais de 1 "chamado" em `staging.ocorrencias_emergenciais` (vários clientes na mesma localização abrindo chamados para a mesma ocorrência), e o script não tratava isso antes do merge — cada interrupção que casava com uma ocorrência de múltiplos chamados era gravada 1 vez por chamado (efeito cartesiano). **Corrigido** em `transformar_staging_dados.py`: agora mantemos só 1 chamado por (`num_ocorrencia`, ano) antes do merge (o mais antigo por data/hora de abertura). O pipeline já foi **rodado de novo para os 6 anos** com a correção — ver contagens finais abaixo.
 
 **Contagens finais validadas (staging completo, após a correção de 24/09 — achados #1 e #5a/#5c):**
@@ -34,7 +36,7 @@ Casamento interrupção ↔ ocorrência no conjunto completo: **93,1% (1.117.331
    Fonte de município, causa (já em 4 níveis), conjunto elétrico (nome + total de consumidores) e consumidores afetados.
 3. **INMET — Dados históricos**
    https://portal.inmet.gov.br/dadoshistoricos
-   Dados de clima; cruzamento externo por município/data, fora do banco (não existe entidade de clima no modelo) — usado para a pergunta analítica sobre relação entre interrupções e condições climáticas. Ainda não iniciado.
+   Dados de clima das estações automáticas de PE (1 ZIP por ano, 1 CSV por estação). Entra no banco como extensão do modelo (3 tabelas em `dados.*`, ver seção "Extensão INMET"). Serve para a pergunta sobre relação entre ocorrências e clima — **relação, não causa**.
 
 Todos os arquivos das duas fontes ANEEL são nacionais e precisam de filtro pelo nome do agente contendo "PERNAMBUCO" (Neoenergia PE / Celpe) antes de entrar no banco — atenção: **o nome da coluna de filtro é diferente em cada fonte** (`NomAgente` em Ocorrências Emergenciais, `NomAgenteRegulado` em Interrupções no schema antigo — no schema novo de 2026, ambas as fontes usam `NomAgente`).
 
@@ -103,20 +105,82 @@ Cardinalidades:
 10. **Tempos de atendimento não disponíveis para 2026** *(achado #5b do QA em 24/09, investigado — não é bug)*: `mda_preparo`/`mda_deslocamento`/`mda_execucao` vêm 100% vazios da própria ANEEL para o 1º semestre de 2026 (conferido contra o arquivo real — os nomes de coluna mapeados estão corretos). Provavelmente esses campos só são preenchidos quando o atendimento é finalizado do lado da ANEEL, e 2026 ainda é ano corrente. Pergunta 4 do canvas (duração média por etapa) fica sem dado para 2026; os demais 5 anos não são afetados.
 11. **Arquivo de 2026 não vem cortado no 1º semestre** *(achado #5c do QA em 24/09)*: o parquet baixado da ANEEL para "2026" traz dados até 31/07, um mês além do recorte do projeto. **Corrigido**: adicionado filtro explícito (`dth_inicio_ocorrencia_aberta`/`dat_inicio_interrupcao` <= 30/06/2026), aplicado só para esse ano.
 
+## Extensão INMET (clima)
+
+Escrita pelo Cauê (`carregar_staging_inmet.py` e `transformar_staging_inmet.py`), rodada e conferida em 24/09 — os números batem exatamente com os que ele já tinha documentado, reprodução perfeita.
+
+### Formato do arquivo (verificado em 2021 a 2026)
+
+- 1 CSV por estação dentro do ZIP anual; só entram os arquivos com `_PE_` no nome.
+- Separador `;`, codificação latin1, vírgula decimal.
+- 8 linhas de cadastro da estação no topo (nome, código, latitude, longitude, altitude, fundação); a tabela começa na linha 9, com 19 colunas iguais em todos os anos.
+- Hora sem medição vem com campo vazio (não aparece `-9999`).
+- Hora em **UTC** — confirmado pela radiação solar de Recife: pico às 15h UTC = 12h local.
+
+### Tabelas
+
+| Tabela | Grão | Conteúdo |
+|---|---|---|
+| `staging.inmet_estacao` | estação × ano | cadastro cru do topo do CSV |
+| `staging.inmet_horario` | estação × hora (UTC) | as 19 colunas do CSV, sem alteração |
+| `dados.estacao` | estação × ano | nome, latitude, longitude, altitude |
+| `dados.clima_diario` | estação × dia (hora local) | chuva total, rajada máxima, temperatura máx./mín. e `horas_com_*` |
+| `dados.municipio_estacao` | município × ano × ordem | as 3 estações mais próximas e a distância em km |
+
+**Contagens finais validadas (rodado em 24/09, batendo com os números originais do Cauê):**
+
+| Tabela | Linhas |
+|---|---|
+| `staging.inmet_estacao` | 75 (estação × ano) |
+| `staging.inmet_horario` | 604.584 |
+| `dados.estacao` | 75 |
+| `dados.clima_diario` | 25.180 |
+| `dados.municipio_estacao` | 3.330 (185 municípios × 6 anos × 3 estações) |
+
+### Mapeamento fonte → modelo
+
+| Campo no CSV | Vai para |
+|---|---|
+| CODIGO (WMO) | `dados.estacao.id_estacao` |
+| ESTACAO, LATITUDE, LONGITUDE, ALTITUDE | `dados.estacao` |
+| Data + Hora UTC, convertidas para UTC-3 | `dados.clima_diario.data_local` |
+| PRECIPITAÇÃO TOTAL, HORÁRIO (mm) | `precipitacao_total_mm` (soma do dia) e `horas_com_chuva` |
+| VENTO, RAJADA MAXIMA (m/s) | `rajada_max_ms` (máximo do dia) e `horas_com_rajada` |
+| TEMPERATURA MÁXIMA / MÍNIMA NA HORA ANT. (AUT) (°C) | `temp_max_c`, `temp_min_c` e `horas_com_temperatura` |
+| coordenadas do IBGE (`municipios_pe_coordenadas.csv`) + coordenadas da estação | `dados.municipio_estacao.distancia_km` |
+
+### Decisões
+
+12. **Estação por ano**: o conjunto de estações e as coordenadas mudam de um ano para outro (Recife tem latitude -8,059 em 2021 e -8,019 em 2026; Petrolina não existe em 2026). Por isso `dados.estacao` e `dados.municipio_estacao` têm o ano na chave.
+13. **Hora local**: o INMET é convertido de UTC para UTC-3 antes de agrupar por dia. A ANEEL foi tratada como hora local (evidência, não prova: na amostra de 500 ocorrências de 2025, o mínimo fica entre 1h e 4h e o pico às 8h). **Pendência de QA**: confirmar com a base completa.
+14. **Chuva sem medição ≠ chuva zero**: dia sem nenhuma hora medida fica NULL (37% dos dias, confirmado na carga de 24/09). As colunas `horas_com_*` dizem quantas horas do dia tiveram medição, por variável.
+15. **3 estações mais próximas por município**: a mais próxima muitas vezes não tem dado de chuva no dia; na análise, usa-se a mais próxima que tiver. Distância em linha reta (fórmula de Haversine), do centro do município até a estação.
+16. **Sem FK de `dados.municipio_estacao` para `dados.municipio`**, de propósito: o `transformar_staging_dados.py` faz `TRUNCATE ... CASCADE` em `dados.municipio`, e o CASCADE apagaria a ligação com as estações toda vez que a transformação da ANEEL rodasse.
+17. **Período**: igual ao da ANEEL, de 01/01/2021 a 30/06/2026 em data local. As 4 estações novas de 2026 (Santa Cruz do Capibaribe, Aliança, Itapissuma e São José da Coroa Grande) só começam em julho/agosto e ficam de fora — confirmado na carga de 24/09 ("sem dados no período, ignorada").
+
+**Atenção na análise de clima**: a estação A301 (Recife) não tem nenhuma medição de chuva de 2022 a 2025 (100% vazio em 2022-2023 e estação ausente em 2024-2025, confirmado na carga de 24/09) — a Região Metropolitana fica com estação mais próxima a ~100 km nesses anos.
+
+**Atenção na análise de clima**: 44 a 70 municípios (conforme o ano) ficam a mais de 50 km da estação mais próxima; Fernando de Noronha fica a mais de 500 km. Definir um limite de distância antes de cruzar.
+
 ## Estrutura de arquivos
 
 ```
 SQL/
   01_criar_banco.sql             -- cria o banco bussola_de_crise
-  02_criar_tabelas_e_schemas.sql -- cria os schemas staging/dados e as 7 tabelas
+  02_criar_tabelas_e_schemas.sql -- cria os schemas staging/dados e as 12 tabelas (7 da ANEEL + 5 do INMET)
 Scripts/
   carregar_staging_aneel.py      -- lê os parquet de um ano, filtra Neoenergia PE, carrega no staging
   transformar_staging_dados.py   -- lê o staging completo e popula dados.* (município, causa, conjunto, ocorrência, interrupção)
+  carregar_staging_inmet.py      -- lê o ZIP de um ano do INMET, pega só as estações de PE, carrega no staging
+  transformar_staging_inmet.py   -- resume por dia (hora local) e liga município <-> 3 estações mais próximas
 Dados/
-  Bruto/                         -- arquivos originais baixados da ANEEL (parquet), um por ano/fonte -- NÃO vai pro git
+  Bruto/                         -- arquivos originais baixados da ANEEL (parquet) e do INMET (zip), um por ano/fonte -- NÃO vai pro git
   Referencia/
-    municipios_pe_ibge.csv       -- lista dos 185 municípios de PE (nome, código IBGE)
+    municipios_pe_ibge.csv        -- lista dos 185 municípios de PE (nome, código IBGE)
+    municipios_pe_coordenadas.csv -- latitude/longitude dos 185 municípios de PE (IBGE)
 ```
+
+No repositório do GitHub, esses mesmos arquivos ficam em `sql/`, `pipeline/`, `dados/brutos/` e `dados/referencia/` (nomes em minúsculo) — os nomes acima são só a organização local de pastas usada neste projeto.
 
 ## Como rodar
 
@@ -133,6 +197,16 @@ Dados/
    python Scripts/transformar_staging_dados.py --municipios "Dados/Referencia/municipios_pe_ibge.csv"
    ```
    Pode rodar quantas vezes precisar — o script limpa (`TRUNCATE`) as 5 tabelas de `dados.*` no início e repopula do zero a partir de tudo que estiver no staging naquele momento.
+6. **INMET — carregar o staging**: baixe o ZIP de cada ano (2021 a 2026) em https://portal.inmet.gov.br/dadoshistoricos, salve em `Dados/Bruto/` sem extrair e rode, uma vez por ano:
+   ```
+   python Scripts/carregar_staging_inmet.py --ano 2021 --zip "Dados/Bruto/2021.zip"
+   ```
+   Pode rodar de novo o mesmo ano: o script apaga as linhas daquele ano antes de gravar.
+7. **INMET — transformar**:
+   ```
+   python Scripts/transformar_staging_inmet.py --coordenadas "Dados/Referencia/municipios_pe_coordenadas.csv"
+   ```
+   Não mexe nas tabelas da ANEEL; pode rodar antes ou depois do `transformar_staging_dados.py`.
 
 ## Pendências
 
@@ -144,4 +218,6 @@ Dados/
 - Pedir ao QA para revalidar rapidamente com os dados reprocessados, antes de liberar para análise em cima do canvas.
 - ~~Recarregar o staging do ano 2026~~ ✅ (24/09) — rodado com a correção dos achados #5a/#5c: trava de idempotência limpou as cargas duplicadas anteriores, filtro de corte removeu as linhas de julho/2026.
 - ~~Rodar `transformar_staging_dados.py` de novo para os 6 anos, após a correção dos achados #5a/#5c~~ ✅ (24/09) — ver contagens finais atualizadas no topo.
-- Planejar o cruzamento com INMET (mapeamento estação meteorológica ↔ município) — Cauê já subiu `carregar_staging_inmet.py` e `transformar_staging_inmet.py` em `pipeline/` (2021 a 1º sem. 2026).
+- ~~Planejar o cruzamento com INMET~~ ✅ (24/09) — extensão INMET carregada e transformada (ver seção "Extensão INMET"); números batem exatamente com os que o Cauê já tinha reportado.
+- **QA**: confirmar com a base completa que os horários da ANEEL estão em hora local (`SELECT extract(hour FROM inicio_ocorrencia), count(*) FROM dados.ocorrencia GROUP BY 1 ORDER BY 1`).
+- **Atenção na análise de clima**: definir um limite de distância município↔estação antes de cruzar os dados (ver notas na seção "Extensão INMET").
