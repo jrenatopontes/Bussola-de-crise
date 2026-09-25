@@ -104,16 +104,22 @@ COLUNAS_OCORRENCIAS_EMERGENCIAIS = {
 # em 4 colunas separadas (igual ao dataset de Interrupções) e vários campos
 # foram renomeados/removidos (não existe mais NumVeiculo, por exemplo).
 #
-# Achado #5b do QA (24/09), INVESTIGADO E FECHADO (não é bug do pipeline):
-# mda_preparo, mda_deslocamento e mda_execucao vêm 100% NULL para 2026.
-# Conferido em 24/09 contra o arquivo real: os nomes abaixo
-# (NumTempoPreparacao/NumTempoDeslocamento/NumTempoExecucao) ESTÃO corretos
-# -- essas colunas existem no arquivo com esses nomes exatos. O problema é
-# que a ANEEL publica essas 3 colunas vazias ("") para 100% das linhas de
-# 2026 -- provavelmente porque só são preenchidas quando o atendimento é
-# finalizado do lado deles, e os dados de 2026 (ano corrente) ainda não
-# tiveram tempo de "fechar", diferente de 2021-2025. Ou seja: limitação da
-# fonte para este ano específico, não algo que o script possa corrigir.
+# Achado #5b do QA (24/09), reaberto no reteste de 25/09 e FECHADO DE NOVO
+# com evidência mais forte (não é bug do pipeline): mda_preparo,
+# mda_deslocamento e mda_execucao vêm 100% NULL para 2026.
+# Conferido em 24/09 que os nomes abaixo (NumTempoPreparacao/
+# NumTempoDeslocamento/NumTempoExecucao) ESTÃO corretos -- essas colunas
+# existem no arquivo com esses nomes exatos. A QA reabriu o achado em 25/09
+# pedindo revisão do mapeamento; a checagem exaustiva feita em 25/09 (não
+# só uma amostra de 5 linhas, e sim as 6.789.484 linhas do arquivo nacional
+# inteiro) confirmou 0 valores não-vazios nessas 3 colunas, em TODOS os
+# meses de dez/2025 a dez/2026 -- inclusive meses bem mais antigos, que já
+# deveriam estar "fechados" há tempos. Isso descarta a hipótese de atraso
+# de publicação (achado original supunha que só faltava tempo de fechar o
+# atendimento) -- a conclusão correta é que a ANEEL simplesmente não
+# publica mais esses 3 campos nesse formato novo do dataset, para nenhuma
+# distribuidora do país. Limitação estrutural da fonte, não algo que o
+# script possa corrigir.
 # Impacto: a pergunta 4 do canvas (duração média por etapa) fica sem dado
 # disponível para 2026 -- os outros 5 anos não são afetados.
 COLUNAS_OCORRENCIAS_EMERGENCIAIS_SCHEMA_NOVO = {
