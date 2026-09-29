@@ -1,6 +1,10 @@
 -- Pergunta 1 do canvas: "Onde se concentram as ocorrências emergenciais em
 -- Pernambuco: quais municípios e conjuntos elétricos registram o maior
 -- volume?"
+--
+-- VERSÃO SEM 2026: como 2026 só tem dado até 30/06 (ano parcial), essa
+-- versão exclui 2026 de todas as consultas, pra comparar só anos completos
+-- (2021 a 2025) sem o viés de um ano incompleto puxando os números pra baixo.
 
 -- 1) Top 20 municípios por volume de ocorrências.
 -- Mostra onde a Neoenergia deveria priorizar equipes de campo de forma
@@ -11,6 +15,7 @@ SELECT
 FROM dados.ocorrencia o
 JOIN dados.municipio m ON m.id_municipio = o.id_municipio
 WHERE m.id_municipio <> '0000000'
+  AND o.inicio_ocorrencia < '2026-01-01'
 GROUP BY m.nome_municipio
 ORDER BY qtd_ocorrencias DESC
 LIMIT 20;
@@ -25,6 +30,7 @@ SELECT
 FROM dados.ocorrencia o
 JOIN dados.conjunto_eletrico c ON c.id_conjunto = o.id_conjunto
 WHERE c.id_conjunto <> '0000000'
+  AND o.inicio_ocorrencia < '2026-01-01'
 GROUP BY c.nome_conjunto
 ORDER BY qtd_ocorrencias DESC
 LIMIT 20;
@@ -37,7 +43,8 @@ SELECT
     COUNT(*) FILTER (WHERE id_municipio = '0000000') AS ocorrencias_sem_municipio,
     COUNT(*) FILTER (WHERE id_conjunto = '0000000') AS ocorrencias_sem_conjunto,
     COUNT(*) AS total_ocorrencias
-FROM dados.ocorrencia;
+FROM dados.ocorrencia
+WHERE inicio_ocorrencia < '2026-01-01';
 
 -- 4) Cruzamento com consumidores afetados, por município.
 -- Mostra não só quantas ocorrências, mas o impacto real em consumidores --
@@ -51,6 +58,7 @@ FROM dados.ocorrencia o
 JOIN dados.municipio m ON m.id_municipio = o.id_municipio
 JOIN dados.interrupcao i ON i.id_ocorrencia = o.id_ocorrencia
 WHERE m.id_municipio <> '0000000'
+  AND o.inicio_ocorrencia < '2026-01-01'
 GROUP BY m.nome_municipio
 ORDER BY total_consumidores_afetados DESC
 LIMIT 20;
