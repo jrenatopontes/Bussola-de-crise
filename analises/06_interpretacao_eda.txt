@@ -1,0 +1,43 @@
+EDA — BÚSSOLA DE CRISE
+
+1. VISÃO GERAL
+A amostra possui 500 ocorrências.
+As datas de início e fim foram convertidas para o formato de data/hora.
+A duração de cada ocorrência foi calculada pela diferença entre dth_fim e dth_inicio.
+
+2. DADOS AUSENTES
+A coluna causa_especifica possui 85 valores ausentes (17.0% da amostra).
+Esses valores não foram substituídos artificialmente; a ausência foi mantida e destacada.
+
+3. CAUSAS DE ORIGEM
+A causa de origem mais frequente é "PROPRIAS DO SISTEMA", com 201 ocorrências
+(40.2% da amostra).
+
+4. CANAL DE ATENDIMENTO
+O canal mais frequente é "RECLAMACAO_OU_INFORMACAO", com 487 ocorrências
+(97.4% da amostra).
+
+5. DURAÇÃO
+Duração média: 515.3 minutos.
+Duração mediana: 276.9 minutos.
+Duração máxima: 5819.3 minutos.
+
+A diferença entre média e mediana mostra que ocorrências muito longas influenciam
+a média. Por isso, a mediana também deve ser usada na interpretação.
+
+6. ANÁLISE POR CAUSA
+Foi criada uma tabela com quantidade, média, mediana, mínimo e máximo da duração
+por causa de origem. A mediana ajuda a comparar os grupos sem deixar que valores
+extremos dominem a análise.
+
+7. ANÁLISE TEMPORAL
+Foi criado um gráfico mensal para observar como as ocorrências se distribuem
+ao longo do período.
+
+8. TEMPOS DAS ETAPAS
+Foram comparados os tempos médios de preparo, deslocamento e execução.
+
+OBSERVAÇÃO
+Esta análise utiliza uma amostra de 500 ocorrências. Os achados devem ser
+apresentados como resultados da amostra disponível, sem generalizar automaticamente
+para todas as ocorrências de Pernambuco.
