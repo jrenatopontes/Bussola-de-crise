@@ -1,0 +1,45 @@
+# Relatório de QA — Revisão do EDA (`analises/eda.py`)
+
+Escopo: revisão dos resultados em `analises/*.csv` e `analises/06_interpretacao_eda.txt`, gerados a partir de `dados/amostra/ocorrencias_pe_amostra.csv` (amostra de 500 ocorrências)
+
+-------------------------------------------------------------------------------
+
+## 1. Resumo executivo
+
+O EDA foi revisado ponto a ponto. **Nenhum bug de cálculo foi encontrado** — os números são internamente consistentes. Duas questões foram investigadas por parecerem suspeitas à primeira vista e **ambas se explicaram como características reais dos dados**, não erros. Uma sugestão de melhoria na interpretação é deixada ao final.
+
+-------------------------------------------------------------------------------
+
+## 2. Investigação: 17% de `causa_especifica` ausente
+
+À primeira vista, esse percentual pareceu contradizer o achado #2 (já fechado em relatório anterior), que validou — na base completa — que a coluna de causa fica praticamente sempre preenchida (só 2 exceções em toda a base).
+
+**Investigação:** o `causa_raw` desta amostra vem em formato `"A;B;C"` (até 3 partes, separado por `;`), diferente do `dsc_fato_gerador_interrupcao` validado no achado #2 (formato `"A - B - C - D"`, sempre 3 ou 4 partes, separado por `" - "`). São fontes/formatos diferentes — por isso as proporções de ausência não são comparáveis diretamente.
+
+**Conclusão: não é bug.** Quando o `causa_raw` só tem 3 níveis (ex.: `"INTERNA;NAO PROGRAMADA;NAO CLASSIFICADA"`), não existe um 4º nível para preencher `causa_especifica` — o vazio reflete a ausência real de dado na fonte, não uma falha no processamento.
+
+**Pendência (não bloqueante):** confirmar qual coluna original da fonte ANEEL foi usada para `causa_raw` nesta amostra, para documentar a rastreabilidade.
+
+-------------------------------------------------------------------------------
+
+## 3. Investigação: outliers de duração
+
+Os valores máximos de `duracao_min` (5.819 min) e `min_preparo` (4.516 min) pareciam altos demais para serem típicos.
+
+**Verificação de consistência:** conferido que `duracao_min` = `min_preparo` + `min_deslocamento` + `min_execucao` em todas as linhas checadas (ex.: 697,97 + 12,45 + 5.108,88 = 5.819,30) — **os cálculos batem exatamente**, não há erro de fórmula.
+
+**Padrão encontrado:** os maiores valores não estão distribuídos entre as 3 etapas — cada caso extremo é dominado por **uma única etapa** (ex.: um caso com preparo de 4.516 min e execução de só 53,83 min; outro com execução de 5.108 min e preparo de só 697 min). São casos operacionais reais e extremos (atendimentos que levaram dias), não erros de digitação isolados.
+
+**Observação adicional:** 3 das 5 maiores durações e 3 dos 5 maiores `min_preparo` têm `id_interrupcao_raw = "S/I"` (ocorrências substitutas, sem interrupção correspondente). Pode ser coincidência da amostra pequena (n=500) — vale conferir se o padrão se repete na base completa antes de generalizar.
+
+-------------------------------------------------------------------------------
+
+## 4. Sugestão para a interpretação (`06_interpretacao_eda.txt`)
+
+O texto já usa mediana ao lado da média (boa prática, dado o efeito dos outliers). Sugestão de complemento: mencionar explicitamente que os valores extremos de duração são dominados por uma única etapa (preparo OU execução, não as duas), já que isso é informação relevante para quem for usar esses dados para dimensionar SLA - Service Level Agreement - (Acordo de Nível de Serviço), ou investigar causas de atrasos.
+
+-------------------------------------------------------------------------------
+
+## 5. Conclusão
+
+EDA aprovado, sem achados bloqueantes. Fica registrada a pendência de documentar a origem exata de `causa_raw` (seção 2) e a sugestão de complemento na interpretação (seção 4).
