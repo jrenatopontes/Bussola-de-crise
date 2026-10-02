@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 /* ====================================================================================
    PERGUNTA 1: CONCENTRAÇÃO GEOGRÁFICA
    Objetivo: Identificar as áreas com maior volume de ocorrências emergenciais 
@@ -30,20 +29,4 @@ GROUP BY
     m.nome_municipio,
     c.nome_conjunto
 ORDER BY
-=======
-SELECT 
-    m.nome_municipio,
-    c.nome_conjunto,
-    COUNT(o.id_ocorrencia) as total_ocorrencias
-FROM 
-    dados.ocorrencia o
-JOIN 
-    dados.municipio m ON o.id_municipio = m.id_municipio
-JOIN 
-    dados.conjunto_eletrico c ON o.id_conjunto = c.id_conjunto
-GROUP BY 
-    m.nome_municipio, 
-    c.nome_conjunto
-ORDER BY 
->>>>>>> f0050e95693107222d5d8ecb1075dbd6b26d86c5
     total_ocorrencias DESC;
