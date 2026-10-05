@@ -55,7 +55,7 @@ representa a maior fatia das ocorrências são outros:
 | Exu | 4.079 | 2.561 | 62,8% |
 | Moreilândia | 1.494 | 934 | 62,5% |
 
-(lista completa com 20 municípios disponível na consulta acima)
+(lista completa com 20 municípios disponível na consulta sql)
 
 ## Sugestão de complemento para o relatório
 
@@ -70,4 +70,4 @@ As duas leituras são válidas e se complementam:
   dominante.
 
 
-## Apenas sugestão se vocês acharem um dado importante.
+Apenas sugestão se vocês acharem um dado importante.
