@@ -111,7 +111,7 @@ tempo + Clima → Solução → Fechamento
 > E o clima? Sim, ele importa: nos dias em que há uma ocorrência ligada a causas
 > ambientais, a chuva medida é **o dobro** da média de um dia qualquer. Mas o mais
 > interessante é **onde** isso pesa mais: não é nas cidades com mais ocorrências no
-> total, como Petrolina — é em municípios como **Santa Cruz, Santa Filomena e
+> total, como Petrolina, é em municípios como **Santa Cruz, Santa Filomena e
 > Granito**, onde **mais de 65% de tudo que acontece é causado pelo clima**. São
 > esses os lugares onde investir em prevenção climática realmente compensa.
 
