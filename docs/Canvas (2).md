@@ -36,7 +36,7 @@ Uma linha por fonte. A amostra precisa ter sido baixada e aberta hoje — coluna
 ## 5. Escopo e entregáveis — a regra do fatiável
 Defina primeiro a fatia mínima: o menor recorte que ainda exercita o ciclo completo (banco → pipeline → análise → dashboard). Ela é o compromisso da equipe. As extensões só entram se a fatia mínima estiver pronta — e nada entra após o congelamento de escopo (05/10).
 ### Fatia mínima (compromisso):
-Ocorrências de interrupção e queda de energia na área de atuação da Neoenergia Pernambuco, considerando um período histórico de 5 anos completos e o primeiro semestre do ano de 2026 dos dados, com organização dos dados em banco/pipeline, identificação dos principais pontos críticos e padrões de ocorrência e dashboard para acompanhamento da distribuição, frequência e características das interrupções.
+Ocorrências de interrupção e queda de energia na área de atuação da Neoenergia Pernambuco, considerando um período histórico de 5 anos completos, com organização dos dados em banco/pipeline, identificação dos principais pontos críticos e padrões de ocorrência e dashboard para acompanhamento da distribuição, frequência e características das interrupções.
 ### Extensões desejáveis (apenas se sobrar tempo):
 Análise de recorrência por região e/ou localização; (ex: Região metropolitana; Zona da Mata; Agreste e Sertão)
 Cruzamento com a base de dados de clima;
@@ -64,8 +64,8 @@ Todos codificam — papéis distribuem responsabilidade de acompanhamento, não 
 | --- | --- | --- |
 | Coordenação de projeto | Danilo Galindo |  |
 | Dados / pipeline | Cauê Lima / Rhayane Leão |  |
-| Análise | José e Maysa Guedes |  |
-| Visualização / pitch | Nilda Juliana / Vitor |  |
+| Análise | José Renato|  |
+| Visualização / pitch | Nilda Juliana |  |
 | QA (Controle de Qualidade) | Amanda |  |
 
 Canal de comunicação da equipe (fora do horário de aula):
